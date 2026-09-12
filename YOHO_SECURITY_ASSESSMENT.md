@@ -25,7 +25,7 @@
 
 | Domain | Port | Protokol | Amaç | Canlı IP (Google DoH) | CDN Sağlayıcı |
 |--------|------|----------|------|----------------------|---------------|
-| `rpc.yoho.media` | 443 | gRPC/H2 | Ana API gateway (69 servis, 559 method) | 43.152.182.46 | Tencent EdgeOne |
+| `rpc.yoho.media` | 443 | gRPC/H2 | Ana API gateway (55 servis, 559+ method) | 43.152.182.46 | Tencent EdgeOne |
 | `sso.yoho.media` | 8080, 443 | TCP/Protobuf | Kalıcı TCP bağlantısı (chat, bildirim) | 43.159.112.32, 43.159.113.32 | Tencent EdgeOne |
 | `www.yoho.media` | 443 | HTTPS | Web API / OAuth callback | 138.113.128.90, 140.150.29.42 | WheCloud CDN |
 | `m.yoho.media` | 443 | HTTPS | Mobil web API | 140.150.29.42, 138.113.128.90 | CDN20 |
@@ -75,28 +75,40 @@
 | Zego RTC | zego.im | Entegre, key config'den geliyor |
 | AppsFlyer | - | Entegre, Firebase instance ID ile |
 
-### 1.6. gRPC Servis Kataloğu (69 Servis, 559 Method - Tümü Unary)
+### 1.6. gRPC Servis Kataloğu (55 Servis - Doğrulanmış)
 
-Tam gRPC servis haritası (yalnızca güvenlik açısından kritik olanlar):
+`RpcStubUtils.java`'dan doğrulanmış tam servis listesi (54 RpcStubUtils + 1 Cake framework):
 
 ```
-sign.SignInService/SignIn              - Giriş (native HMAC korumalı)
-sign.SignInService/SignUp              - Kayıt (native HMAC korumalı)
-sign.SignInService/AppStart            - Uygulama başlatma (native HMAC korumalı)
-sign.SignInService/ResetPwd            - Şifre sıfırlama (native HMAC korumalı)
-sign.SignInService/ForceUpdate         - Zorunlu güncelleme (native HMAC korumalı)
-proto.red_env.RedEnvelopeService/C2SScramblingRedEnvelope - Kırmızı zarf (native HMAC korumalı)
+NATIVE HMAC KORUMALI (6 method):
+  sign.SignInService/SignIn, SignUp, AppStart, ResetPwd, ForceUpdate
+  proto.red_env.RedEnvelopeService/C2SScramblingRedEnvelope
 
-proto.user.UserProfileService/*       - Kullanıcı profil işlemleri
-proto.room.RoomService/*              - Oda işlemleri
-proto.msg.MsgService/*                - Mesajlaşma
-proto.wallet.WalletService/*          - Cüzdan/ödeme işlemleri
-proto.gift.GiftService/*              - Hediye sistemi
-proto.feed.FeedService/*              - Feed/timeline
-proto.live.LiveStreamService/*        - Canlı yayın
+FİNANSAL SERVİSLER (korumasız):
+  ApppayGrpc, CashOutServiceGrpc, PayCenterServiceGrpc,
+  SilverCoinsLogicServiceGrpc, ShopServiceGrpc
+
+HEDİYE/ÖDÜL SERVİSLERİ (korumasız):
+  AudioGiftServiceGrpc, ChatGiftServiceGrpc, GiftListGrpc,
+  LuckyGiftServiceGrpc, RedEnvelopeServiceGrpc, RedRainServiceGrpc
+
+ODA/YAYIN SERVİSLERİ (korumasız):
+  RoomMgrServiceGrpc, RoomMicManagerServiceGrpc, EnterRoomServiceGrpc,
+  RoomRcmdServiceGrpc, AudioChatServiceGrpc, BroadcastShareServiceGrpc
+
+KULLANICI SERVİSLERİ (korumasız):
+  UserInfoServiceGrpc, UserSvrServiceGrpc, FriendShipServiceGrpc,
+  FansServiceGrpc, GuardianRelationServiceGrpc, NewUserServiceGrpc
+
+DİĞER (korumasız):
+  TranslateServiceGrpc, FamilyServiceGrpc, RankingListServiceGrpc,
+  MeetServiceGrpc, AudioTaskServiceGrpc, DailyTaskServiceGrpc,
+  FastGameServiceGrpc, GameLevelServiceGrpc, GameBuddyServiceGrpc,
+  AuctionServiceGrpc, AgencyServiceGrpc, CpTaskServiceGrpc,
+  ActivitySquareServiceGrpc, GreedyActivityServiceGrpc, ve daha fazlası
 ```
 
-**KESİN HÜKÜM**: 559 method'un sadece **6 tanesi** native HMAC koruması altında. Geri kalan 553 method yalnızca `x-auth-token` header'ı ile korunuyor. Wallet, Gift, Room gibi kritik servisler **ek imza koruması YOK**.
+**KESİN HÜKÜM**: 55 servisin sadece **1 tanesi** (SignInService, 6 method ile) native HMAC koruması altında. Geri kalan **54 servis** yalnızca `x-auth-token` header'ı ile korunuyor. Apppay, CashOut, PayCenter gibi **finansal servisler** dahil ek imza koruması **YOK**.
 
 ---
 
@@ -255,9 +267,17 @@ RenewToken RPC çağrısı:
 
 ### 3.5. Google Play Integrity
 
-**Kullanım**: `SignIn` ve `SignUp` isteklerinde Play Integrity token gönderiliyor.
+**Dosya**: `com/mico/framework/analysis/security/PlayIntegrityManager.java` (809 satır)
 
-**KESİN HÜKÜM**: Play Integrity yalnızca giriş/kayıt aşamasında kullanılıyor. Oturum süresince yapılan API çağrılarında **tekrar kontrol edilmiyor**. Bir kez geçerli token alındıktan sonra, tüm oturum boyunca Play Integrity bypass edilebilir.
+- **API Tipi**: Google Play Integrity **Standard API**
+- **Token Süresi**: 30 dakika sonra provider sıfırlanır
+- **Hash Algoritması**: SHA-256 (parametreler `&` ile birleştirilir)
+- **Şifreleme**: RSA/ECB/PKCS1Padding ile sunucu public key'i kullanılarak
+- **Feature Flag**: Firebase Remote Config ile kontrol ediliyor (0=devre dışı, 1=aktif, 2=devre dışı)
+- **App Cloner Tespiti**: `com.applisto.appcloner` metadata key kontrolü
+- **Kullanım Kapsamı**: SignIn, SignUp, AppStart + tüm OAuth türleri (Phone, Facebook, Google, Snapchat, TikTok, Huawei, Line)
+
+**KESİN HÜKÜM**: Play Integrity yalnızca giriş/kayıt/AppStart aşamasında kullanılıyor. Oturum süresince yapılan API çağrılarında **tekrar kontrol edilmiyor**. Firebase Remote Config ile tamamen kapatılabiliyor (value=0 veya 2). Token provider 30 dakika sonra expire oluyor ama oturum devam ediyor.
 
 ---
 
@@ -363,22 +383,26 @@ InterfaceC35273b<AccessTokenResponse> getAccessToken(
 
 **KESİN HÜKÜM**: OAuth client_secret **asla** mobil uygulamada bulunmamalıdır. Bu, TikTok OAuth akışının tamamen taklit edilmesine olanak sağlar. Sandbox key olmasına rağmen, prodüksiyon key'i de aynı mekanizma ile (`C23124v` config utility) dağıtılıyor ve istemciden erişilebilir. Ciddiyet: **YÜKSEK**.
 
-### 5.5. YÜKSEK: 553/559 gRPC Method'unda Native İmza Koruması Yok
+### 5.5. YÜKSEK: 54/55 gRPC Serviste Native İmza Koruması Yok
 
 **Dosya**: `p145J8/C0717a.java`
 
-Sadece 6 method native HMAC koruması altında:
-- SignIn, SignUp, AppStart, ResetPwd, ForceUpdate, C2SScramblingRedEnvelope
+55 gRPC servisin sadece 1'i (SignInService - 6 method) native HMAC koruması altında.
 
-Korumasız kritik servisler:
-- `proto.wallet.WalletService/*` - **Cüzdan/ödeme işlemleri**
-- `proto.gift.GiftService/*` - **Hediye gönderme**
-- `proto.room.RoomService/*` - **Oda yönetimi**
-- `proto.user.UserProfileService/*` - **Profil değiştirme**
-- `proto.msg.MsgService/*` - **Mesajlaşma**
-- `proto.live.LiveStreamService/*` - **Canlı yayın kontrolü**
+Korumasız **finansal** servisler:
+- `ApppayGrpc` - **Ödeme**
+- `CashOutServiceGrpc` - **Para çekme**
+- `PayCenterServiceGrpc` - **Ödeme merkezi**
+- `SilverCoinsLogicServiceGrpc` - **Sanal para**
+- `ShopServiceGrpc` - **Mağaza**
 
-**KESİN HÜKÜM**: Çalınan bir `access_token` ile Wallet, Gift, Room, Feed gibi tüm kritik API'ler **ek doğrulama olmadan** çağrılabilir. Token çalmak da TLS doğrulamasının devre dışı olması nedeniyle (5.1) kolaydır. Ciddiyet: **YÜKSEK**.
+Korumasız **hediye/ödül** servisleri:
+- `AudioGiftServiceGrpc`, `ChatGiftServiceGrpc`, `GiftListGrpc`, `LuckyGiftServiceGrpc`
+
+Korumasız **oda/yayın** servisleri:
+- `RoomMgrServiceGrpc`, `EnterRoomServiceGrpc`, `AudioChatServiceGrpc`
+
+**KESİN HÜKÜM**: Çalınan bir `access_token` ile CashOut, Apppay, PayCenter dahil tüm finansal API'ler **ek doğrulama olmadan** çağrılabilir. Token çalmak da TLS doğrulamasının devre dışı olması nedeniyle (5.1) kolaydır. Ciddiyet: **YÜKSEK**.
 
 ### 5.6. ORTA: TCP Handshake HmacMD5 Kullanıyor
 
